@@ -32,6 +32,8 @@ model_names = sorted(name for name in models.__dict__
 parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
 parser.add_argument('data', metavar='DIR',
                     help='path to dataset')
+parser.add_argument('--ckpt_dir', help='path to save ckpt', 
+                    default="/home/seyoung/moco/checkpoints")
 parser.add_argument('-a', '--arch', metavar='ARCH', default='resnet50',
                     choices=model_names,
                     help='model architecture: ' +
@@ -101,6 +103,16 @@ parser.add_argument('--cos', action='store_true',
 def main():
     args = parser.parse_args()
 
+    # create dir to save args & ckpt
+    timestamp = time.strftime("2022%m%d_%H%M", time.localtime(time.time()))
+    CKPT_ROOT_DIR = os.path.join(args.ckpt_dir, timestamp)
+    os.mkdir(CKPT_ROOT_DIR)
+
+    # save args as file
+    args_dict = vars(args)
+    with open(os.path.join(CKPT_ROOT_DIR, "args.txt"), "w") as f:
+        f.write(str(args_dict))
+
     if args.seed is not None:
         random.seed(args.seed)
         torch.manual_seed(args.seed)
@@ -121,6 +133,7 @@ def main():
     args.distributed = args.world_size > 1 or args.multiprocessing_distributed
 
     ngpus_per_node = torch.cuda.device_count()
+    print("Available GPUs:", ngpus_per_node)
     if args.multiprocessing_distributed:
         # Since we have ngpus_per_node processes per node, the total world_size
         # needs to be adjusted accordingly
@@ -257,6 +270,7 @@ def main_worker(gpu, ngpus_per_node, args):
         train_dataset, batch_size=args.batch_size, shuffle=(train_sampler is None),
         num_workers=args.workers, pin_memory=True, sampler=train_sampler, drop_last=True)
 
+    print("Start Training")
     for epoch in range(args.start_epoch, args.epochs):
         if args.distributed:
             train_sampler.set_epoch(epoch)
@@ -272,7 +286,7 @@ def main_worker(gpu, ngpus_per_node, args):
                 'arch': args.arch,
                 'state_dict': model.state_dict(),
                 'optimizer' : optimizer.state_dict(),
-            }, is_best=False, filename='checkpoint_{:04d}.pth.tar'.format(epoch))
+            }, is_best=False, ckpt_dir=CKPT_ROOT_DIR, filename='checkpoint_{:04d}.pth.tar'.format(epoch))
 
 
 def train(train_loader, model, criterion, optimizer, epoch, args):
@@ -322,8 +336,8 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
             progress.display(i)
 
 
-def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
-    torch.save(state, filename)
+def save_checkpoint(state, is_best, ckpt_dir, filename='checkpoint.pth.tar'):
+    torch.save(state, os.path.join(ckpt_dir, filename))
     if is_best:
         shutil.copyfile(filename, 'model_best.pth.tar')
 
