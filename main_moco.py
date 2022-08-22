@@ -21,6 +21,7 @@ import torch.utils.data.distributed
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 import torchvision.models as models
+from torch.utils.tensorboard import SummaryWriter
 
 import moco.loader
 import moco.builder
@@ -106,7 +107,7 @@ def main():
     # create dir to save args & ckpt
     timestamp = time.strftime("2022%m%d_%H%M", time.localtime(time.time()))
     CKPT_ROOT_DIR = os.path.join(args.ckpt_dir, timestamp)
-    os.mkdir(CKPT_ROOT_DIR)
+    os.makedirs(CKPT_ROOT_DIR, exist_ok=True)
 
     # save args as file
     args_dict = vars(args)
@@ -140,13 +141,13 @@ def main():
         args.world_size = ngpus_per_node * args.world_size
         # Use torch.multiprocessing.spawn to launch distributed processes: the
         # main_worker process function
-        mp.spawn(main_worker, nprocs=ngpus_per_node, args=(ngpus_per_node, args))
+        mp.spawn(main_worker, nprocs=ngpus_per_node, args=(ngpus_per_node, args, CKPT_ROOT_DIR))
     else:
         # Simply call main_worker function
-        main_worker(args.gpu, ngpus_per_node, args)
+        main_worker(args.gpu, ngpus_per_node, args, CKPT_ROOT_DIR)
 
 
-def main_worker(gpu, ngpus_per_node, args):
+def main_worker(gpu, ngpus_per_node, args, CKPT_ROOT_DIR):
     args.gpu = gpu
 
     # suppress printing if not master
@@ -172,7 +173,6 @@ def main_worker(gpu, ngpus_per_node, args):
     model = moco.builder.MoCo(
         models.__dict__[args.arch],
         args.moco_dim, args.moco_k, args.moco_m, args.moco_t, args.mlp)
-    print(model)
 
     if args.distributed:
         # For multiprocessing distributed, DistributedDataParallel constructor
@@ -300,6 +300,9 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
         [batch_time, data_time, losses, top1, top5],
         prefix="Epoch: [{}]".format(epoch))
 
+    # init tensorboard writer
+    writer = SummaryWriter()
+
     # switch to train mode
     model.train()
 
@@ -323,6 +326,11 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
         top1.update(acc1[0], images[0].size(0))
         top5.update(acc5[0], images[0].size(0))
 
+        # tensorboard
+        writer.add_scalar("acc1/train", acc1[0])
+        writer.add_scalar("acc5/train", acc5[0])
+        writer.add_scalar("loss/train", loss.item())
+
         # compute gradient and do SGD step
         optimizer.zero_grad()
         loss.backward()
@@ -335,6 +343,8 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
         if i % args.print_freq == 0:
             progress.display(i)
 
+    writer.flush()
+    writer.close()
 
 def save_checkpoint(state, is_best, ckpt_dir, filename='checkpoint.pth.tar'):
     torch.save(state, os.path.join(ckpt_dir, filename))
@@ -407,7 +417,7 @@ def accuracy(output, target, topk=(1,)):
 
         res = []
         for k in topk:
-            correct_k = correct[:k].view(-1).float().sum(0, keepdim=True)
+            correct_k = correct[:k].reshape(-1).float().sum(0, keepdim=True)
             res.append(correct_k.mul_(100.0 / batch_size))
         return res
 
